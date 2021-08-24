@@ -1,0 +1,51 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Flask S3 uploader
+Parameters:
+
+  EcrRepositoryName:
+    Type: String
+    Description: Docker image name
+  DockerImageTag:
+    Type: String
+    Description: tip - use Git commit sha
+  GitRepoUrl:
+    Type: String
+    Default: https://github.com/docker-library/hello-world.git
+    Description: passed to `git clone` as is
+
+Resources:
+  DockerBuilder:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: docker-build-push.cfn.yaml
+      TimeoutInMinutes: 15
+      Parameters:
+          EcrRepositoryName: !Ref EcrRepositoryName
+          DockerImageTag: !Ref DockerImageTag
+          GitRepoUrl: !Ref GitRepoUrl
+
+  Vpc:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: vpc.cfn.yaml
+      TimeoutInMinutes: 10
+
+  Ecs:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ecs.cfn.yaml
+      TimeoutInMinutes: 10
+      Parameters:
+        VPC: !GetAtt Vpc.Outputs.VpcId
+        IsolatedSubnetA: !Select [ 0, !Split [ ",", !GetAtt Vpc.Outputs.IsolatedSubnets ] ]
+        IsolatedSubnetB: !Select [ 1, !Split [ ",", !GetAtt Vpc.Outputs.IsolatedSubnets ] ]
+        PublicSubnetA: !Select [ 0, !Split [ ",", !GetAtt Vpc.Outputs.PublicSubnets ] ]
+        PublicSubnetB: !Select [ 1, !Split [ ",", !GetAtt Vpc.Outputs.PublicSubnets ] ]
+        Image: !Join [ ":", [ !GetAtt DockerBuilder.Outputs.EcrRepositoryUrl, !Ref DockerImageTag ] ]
+        EcrRepositoryArn: !GetAtt DockerBuilder.Outputs.EcrRepositoryArn
+
+Outputs:
+  ApplicationUrl:
+    Description: Navigate to this URL to access the solution
+    Value: !GetAtt Ecs.Outputs.ApplicationUrl

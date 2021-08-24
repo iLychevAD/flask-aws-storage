@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Description: CodeBuild project to build and push to ECR a Docker image 
+
+Parameters:
+  EcrRepositoryName:
+    Type: String
+    Default: test-docker-codebuild
+  DockerImageTag:
+    Type: String
+#    AllowedPattern:
+  GitRepoUrl:
+    Type: String
+    Default: https://github.com/docker-library/hello-world.git
+    Description: passed to `git clone` as is
+
+Outputs:
+  DockerCodeBuildProject:
+    Value: !Ref DockerCodeBuildProject
+  EcrRepositoryUrl:
+    Value: !GetAtt EcrRepository.RepositoryUri
+  EcrRepositoryArn:
+    Value: !GetAtt EcrRepository.Arn
+
+Resources:
+  KickOffCodebuildFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+          - AWSLambdaExecute
+          - Version: '2012-10-17' 
+            Statement:
+                - Effect: Allow
+                  Action:
+                      - codebuild:StartBuild
+                      - codebuild:BatchGetBuilds
+                  Resource: '*'
+      Timeout: 30
+      Handler: index.handler
+      Runtime: python3.7
+      InlineCode: !Sub |
+        import boto3
+        import json
+        import base64
+        import cfnresponse
+        def handler(event, context):
+          if event['RequestType'] == "Delete":
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            exit()
+          try:
+            print("${DockerCodeBuildProject}")
+            client = boto3.client('codebuild')
+            EcrRepositoryUrl = event['ResourceProperties']['EcrRepositoryUrl']
+            GitRepoUrl = event['ResourceProperties']['GitRepoUrl']
+            DockerImageTag = event['ResourceProperties']['DockerImageTag']
+            cfn_response_json = {
+              "StackId": event["StackId"],
+              "RequestId": event["RequestId"],
+              "LogicalResourceId": event["LogicalResourceId"],
+              "PhysicalResourceId": "0",
+              "Status": "CUSTOM_RESOURCE_STATUS_PLACEHOLDER"
+            }
+            cfn_response_json_string = json.dumps(cfn_response_json)
+            cfn_response_json_string_bytes = cfn_response_json_string.encode('ascii')
+            cfn_response_json_string_bytes_base64_bytes = base64.b64encode(cfn_response_json_string_bytes)
+            CfnResponseJsonBase64String = cfn_response_json_string_bytes_base64_bytes.decode('ascii')
+            CfnResponseUrl = (event['ResponseURL'])
+
+            response = client.start_build(
+              projectName='${DockerCodeBuildProject}',
+              environmentVariablesOverride=[
+                {'name': 'GIT_REPO_URL', 'value': GitRepoUrl},
+                {'name': 'DOCKER_IMAGE_TAG', 'value': DockerImageTag},
+                {'name': 'ECR_REPO_URL', 'value': EcrRepositoryUrl},
+                {'name': 'CFN_RESPONSE_URL', 'value': CfnResponseUrl},
+                {'name': 'CFN_RESPONSE_JSON_BASE64', 'value': CfnResponseJsonBase64String}
+              ])
+            # The response is to be sent by CodeBuild
+            #cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+          except Exception as e:
+            print(e)
+            cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+  KickOffCodebuildCustomResource:
+    Type: Custom::KickOffCodebuild
+    Properties:
+      ServiceToken: !GetAtt KickOffCodebuildFunction.Arn
+      DockerImageTag: !Ref DockerImageTag
+      EcrRepositoryUrl: !GetAtt EcrRepository.RepositoryUri
+      GitRepoUrl: !Ref GitRepoUrl
+
+  EcrCleanerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+          - AWSLambdaExecute
+          - Version: '2012-10-17' 
+            Statement:
+                - Effect: Allow
+                  Action:
+                      - ecr:*
+                  Resource: !GetAtt EcrRepository.Arn
+      Timeout: 10
+      Handler: index.handler
+      Runtime: python3.7
+      InlineCode: !Sub |
+        import boto3
+        import cfnresponse
+        def handler(event, context):
+          if event['RequestType'] == "Delete": # Run only if the Stack is being  deleted
+            try: 
+              client = boto3.client('ecr')
+              repo = event['ResourceProperties']['EcrRepositoryName']
+              response = client.list_images(repositoryName=repo)
+              imageList = [ image for image in response['imageIds'] ]
+              response2 = client.batch_delete_image(repositoryName=repo, imageIds=imageList)
+              print(response2)
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, None, False, "Reason: deleted" + str(imageList))
+            except Exception as e:
+              print(e)
+              cfnresponse.send(event, context, cfnresponse.FAILED, {}, None, False, "Reason: " + str(e))
+          else:
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, None, False, "Reason: not a Delete event")
+
+  EcrCleanerCustomResource:
+    Type: Custom::EcrCleaner
+    Properties:
+      ServiceToken: !GetAtt EcrCleanerFunction.Arn
+      EcrRepositoryName: !Ref EcrRepositoryName
+
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Properties: 
+      RepositoryName: !Ref EcrRepositoryName
+
+  DockerCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: EcrRepository
+    Properties:
+      ServiceRole: !GetAtt DockerBuildCodeBuildProjectServiceRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0 #aws/codebuild/docker:18.09.0 #docker:dind
+        PrivilegedMode: true # https://docs.aws.amazon.com/codebuild/latest/userguide/sample-docker-custom-image.html
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: REGION
+            Value: !Ref AWS::Region
+
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+
+          env:
+            variables:
+              GIT_REPO_URL:
+              DOCKER_IMAGE_TAG:
+              ECR_REPO_URL:
+              CFN_RESPONSE_JSON_BASE64:
+              CFN_RESPONSE_URL:
+              DOCKER_BUILDKIT: "1"
+
+          phases:
+            install:
+              runtime-versions:
+                docker: 19
+            build:
+              commands:
+                - set -e
+                - export CUSTOM_RESOURCE_STATUS='FAILED'
+                - |
+                  echo "Starting Docker daemon..."
+                  nohup /usr/local/bin/dockerd --host=unix:///var/run/docker.sock --host=tcp://127.0.0.1:2375 --storage-driver=overlay2&
+                  timeout 15 sh -c "until docker info > /dev/null; do echo .; sleep 1; done; echo 'Docker Daemon started'"
+
+                - git clone ${GIT_REPO_URL} cloned_git_repo && cd cloned_git_repo
+
+                - aws --version && $(aws ecr get-login --no-include-email --region ${REGION} ) # | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+
+                - #sed -i -e "s|FROM \(.*\)|FROM ${AWS_ACCOUNT_ID}\.dkr\.ecr\.${REGION}\.amazonaws\.com/\1|g" Dockerfile
+                - #  To use cache you build a cache image with --build-arg BUILDKIT_INLINE_CACHE=1
+                - # then do: docker build --cache-from 
+                - |
+                  set -e
+                  docker build -t ${ECR_REPO_URL}:${DOCKER_IMAGE_TAG} -f Dockerfile .
+                  docker image ls
+                  docker push ${ECR_REPO_URL}:${DOCKER_IMAGE_TAG}
+                  export CUSTOM_RESOURCE_STATUS='SUCCESS'
+              finally:
+                - |
+                  echo "Unblock CFN Stack with sending status: ${CUSTOM_RESOURCE_STATUS}"
+                  echo ${CFN_RESPONSE_URL}
+                  echo ${CFN_RESPONSE_JSON_BASE64} | base64 -d | sed -e "s/CUSTOM_RESOURCE_STATUS_PLACEHOLDER/$CUSTOM_RESOURCE_STATUS/" > ./cfn-response.json
+                  cat ./cfn-response.json
+                  curl -vv -i -X PUT -H 'Content-Type:' -d "@./cfn-response.json" "${CFN_RESPONSE_URL}"
+      TimeoutInMinutes: 5
+
+  DockerBuildCodeBuildProjectServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codebuild.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:*
+
+
