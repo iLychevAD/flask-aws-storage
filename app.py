@@ -1,16 +1,22 @@
 import os
-from flask import Flask, render_template, request, redirect, send_file
+from flask import Flask, render_template, request, redirect, send_file, jsonify
 from s3_functions import list_files, upload_file, show_image
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
-BUCKET = "lats-image-data"
+BUCKET = os.environ["BUCKET"]
 
 @app.route("/")
 def home():
     contents = list_files(BUCKET)
     return render_template('index.html')
+
+@app.route("/health")
+def health_check():
+    resp = jsonify(success=True)
+    resp.status_code = 200
+    return resp
 
 @app.route("/pics")
 def list():
@@ -26,5 +32,6 @@ def upload():
         return redirect("/")
 
 if __name__ == '__main__':
-    app.run(debug=True)
-    
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    print(BUCKET)
+    app.run(host="0.0.0.0", debug=True)
