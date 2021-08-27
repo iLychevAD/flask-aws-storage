@@ -36,7 +36,12 @@ Finally, the last one creates a S3 bucket and spin ups an ECS cluster to run a t
 
 `aws cloudformation create-stack --stack-name <any name> --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND --template-body file://packaged.cfn.yaml --parameters ParameterKey=DockerImageTag,ParameterValue=<e.g. Git commit sha> ParameterKey=GitRepoUrl,ParameterValue="https://github.com/<your name>/<repo name>.git" ParameterKey=EcrRepositoryName,ParameterValue=uploader`
 
-(if you need to update an already created stack, use `update-stack` instead of `create-stack`)
+For the `GitRepoUrl` specify the URL (as it consumed by `git clone`) of a Git repo containing a Dockerfile (i.e. the URL of this repo). CodeBuild project performs `git clone` of this URL to obtain a Dockerfile. Keep in mind, that public repos only supported.
+
+ For the `DockerImageTag` specify some uniq value, i.e. date of Git commit sha. Note, that upon CFN Stack update the Docker build step is only triggered 
+if the passed value of `DockerImageTag` differs from the one passed in to the previous CFN Stack operation (create or update).
+
+If you need to update an already created CFN Stack, use `update-stack` instead of `create-stack`)
 
 
 3. Navigate to the AWS web console to the CloudFormation Stacks section and enjoy watching the process of the Stack bootstraping.
