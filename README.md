@@ -38,7 +38,7 @@ Finally, the last one creates a S3 bucket and spin ups an ECS cluster to run a t
 
 For the `GitRepoUrl` specify the URL (as it consumed by `git clone`) of a Git repo containing a Dockerfile (i.e. the URL of this repo). CodeBuild project performs `git clone` of this URL to obtain a Dockerfile. Keep in mind, that public repos only supported.
 
- For the `DockerImageTag` specify some uniq value, i.e. date of Git commit sha. Note, that upon CFN Stack update the Docker build step is only triggered 
+ For the `DockerImageTag` specify some uniq value, i.e. a current date or Git commit sha. Note, that upon CFN Stack update the Docker build step is only triggered 
 if the passed value of `DockerImageTag` differs from the one passed in to the previous CFN Stack operation (create or update).
 
 If you need to update an already created CFN Stack, use `update-stack` instead of `create-stack`)
